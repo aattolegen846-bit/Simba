@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --duo-green: #58CC02;
+    --duo-green-dark: #46A302;
+    --duo-blue: #1CB0F6;
+    --duo-blue-dark: #1899D6;
+    --duo-red: #FF4B4B;
+    --duo-red-dark: #EA2B2B;
+    --duo-gray: #E5E5E5;
+    --duo-gray-dark: #AFAFAF;
+  }
+}
+
+@layer components {
+  .premium-card {
+    @apply bg-white border-2 border-gray-100 rounded-[32px] p-8 shadow-sm transition-all duration-300;
+  }
+
+  .premium-button {
+    @apply bg-[#58CC02] text-white px-8 py-4 rounded-2xl text-xl font-black shadow-[0_4px_0_#46A302] 
+           hover:bg-[#52C002] active:translate-y-1 active:shadow-none transition-all;
+  }
+
+  .premium-button-blue {
+    @apply bg-[#1CB0F6] text-white px-8 py-4 rounded-2xl text-xl font-black shadow-[0_4px_0_#1899D6] 
+           hover:bg-[#1AABED] active:translate-y-1 active:shadow-none transition-all;
+  }
+
+  .glass-morphism {
+    @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-2xl;
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.progress-bar-shine {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.4) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: shine 2s infinite;
+}
+
+@keyframes shine {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Duolingo-style text shadow for headers if needed */
+.duo-text-shadow {
+  text-shadow: 0 2px 0 rgba(0,0,0,0.1);
+}

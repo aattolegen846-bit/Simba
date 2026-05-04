@@ -1,5 +1,14 @@
+# Python
 .env
 instance/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Node.js / Next.js
+node_modules
+.next
+.DS_Store
+.env.local
+dist
+build

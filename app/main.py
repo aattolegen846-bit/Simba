@@ -42,6 +42,7 @@ load_dotenv()
 from app.config import Config
 from app.extensions import cache, db, limiter, migrate
 from app.api.routes import router
+from flask_cors import CORS
 
 REQUEST_COUNT = Counter("simpai_http_requests_total", "Total HTTP requests", ["method", "path", "status"])
 REQUEST_LATENCY = Histogram("simpai_http_request_duration_seconds", "HTTP request latency", ["method", "path"])
@@ -65,6 +66,7 @@ def create_app() -> Flask:
     _configure_logging()
     webapp = Flask(__name__)
     webapp.config.from_object(Config)
+    webapp.config['MAX_CONTENT_LENGTH'] = Config.MAX_CONTENT_LENGTH
     if str(webapp.config.get("SQLALCHEMY_DATABASE_URI", "")).startswith("sqlite"):
         webapp.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
 
@@ -72,6 +74,14 @@ def create_app() -> Flask:
     cache.init_app(webapp)
     limiter.init_app(webapp)
     migrate.init_app(webapp, db)
+    CORS(webapp,
+         resources={r"/api/*": {
+             "origins": ["http://localhost:3000", "http://localhost:3001"],
+             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+             "allow_headers": ["Content-Type", "Authorization"],
+             "expose_headers": ["X-Request-Id", "X-Response-Time-Ms"]
+         }},
+         supports_credentials=True)
     if sentry_sdk and os.getenv("SENTRY_DSN"):
         sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), traces_sample_rate=0.05)
 
@@ -110,13 +120,29 @@ def create_app() -> Flask:
 
     @webapp.errorhandler(Exception)
     def _handle_unexpected_error(error):  # noqa: ANN001
+        logging.error(
+            "unhandled_exception",
+            extra={
+                "error": str(error),
+                "error_type": type(error).__name__,
+                "request_id": g.get("request_id", "n/a"),
+                "path": request.path,
+            },
+            exc_info=True,
+        )
+
+        # Don't leak internal details in production
+        if webapp.config.get("ENV") == "production":
+            message = "An internal error occurred"
+        else:
+            message = str(error)
+
         return (
             jsonify(
                 {
                     "error": "internal_server_error",
-                    "message": str(error),
+                    "message": message,
                     "request_id": g.get("request_id", "n/a"),
-                    "path": request.path,
                 }
             ),
             500,

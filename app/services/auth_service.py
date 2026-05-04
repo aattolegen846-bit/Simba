@@ -1,5 +1,6 @@
 import datetime
 import hashlib
+import hmac
 import jwt
 import os
 import secrets
@@ -12,9 +13,10 @@ from app.database import db
 
 import logging
 
-# Secret key should be at least 32 bytes for HS256 to avoid warnings and potential issues
-DEFAULT_SECRET = "senior-secret-key-that-is-at-least-32-bytes-long-for-security"
-SECRET_KEY = os.getenv("SECRET_KEY", DEFAULT_SECRET)
+# Secret key MUST be set via environment variable in production
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY environment variable must be set")
 ACCESS_TOKEN_MINUTES = int(os.getenv("JWT_EXP_MINUTES", "15"))
 REFRESH_TOKEN_DAYS = int(os.getenv("JWT_REFRESH_DAYS", "30"))
 MAX_FAILED_LOGIN_ATTEMPTS = int(os.getenv("MAX_FAILED_LOGIN_ATTEMPTS", "5"))
@@ -80,7 +82,12 @@ class AuthService:
     @staticmethod
     def generate_refresh_token(user_id: int) -> str:
         raw = secrets.token_urlsafe(48)
-        token_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        # Use HMAC with secret key instead of plain SHA256
+        token_hash = hmac.new(
+            SECRET_KEY.encode("utf-8"),
+            raw.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
         refresh = RefreshToken(
             user_id=user_id,
             token_hash=token_hash,
@@ -93,7 +100,11 @@ class AuthService:
 
     @staticmethod
     def rotate_refresh_token(raw_refresh_token: str) -> Optional[tuple[str, str]]:
-        token_hash = hashlib.sha256(raw_refresh_token.encode("utf-8")).hexdigest()
+        token_hash = hmac.new(
+            SECRET_KEY.encode("utf-8"),
+            raw_refresh_token.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
         record = RefreshToken.query.filter_by(token_hash=token_hash).first()
         
         if not record:
@@ -126,7 +137,11 @@ class AuthService:
 
     @staticmethod
     def revoke_refresh_token(raw_refresh_token: str) -> bool:
-        token_hash = hashlib.sha256(raw_refresh_token.encode("utf-8")).hexdigest()
+        token_hash = hmac.new(
+            SECRET_KEY.encode("utf-8"),
+            raw_refresh_token.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
         record = RefreshToken.query.filter_by(token_hash=token_hash, revoked=False).first()
         if not record:
             return False
@@ -139,8 +154,15 @@ class AuthService:
         try:
             payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
             if payload.get("type") != "access":
+                logger.warning("jwt_decode_invalid_type", extra={"type": payload.get("type")})
                 return None
             return int(payload["sub"])
+        except jwt.ExpiredSignatureError:
+            logger.info("jwt_decode_expired")
+            return None
+        except jwt.InvalidTokenError as e:
+            logger.warning("jwt_decode_invalid", extra={"error": str(e)})
+            return None
         except Exception as e:
-            print(f"JWT Decode Error: {e}")
+            logger.error("jwt_decode_unexpected_error", extra={"error": str(e)})
             return None

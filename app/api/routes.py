@@ -1,6 +1,7 @@
 from dataclasses import asdict
 from enum import Enum
 from functools import wraps
+import os
 
 from flask import Blueprint, jsonify, request
 
@@ -23,6 +24,7 @@ from app.models.schemas import (
     QuizSubmitRequest,
     VocabReviewItem,
 )
+from app.validators import validate_email, validate_username, validate_password, ValidationError
 from app.services.auth_service import AuthService
 from app.services.adaptive_learning_service import AdaptiveLearningService
 from app.services.assessment_service import AssessmentService
@@ -67,32 +69,60 @@ from app.middleware.auth import token_required, role_required
 @router.post("/auth/register")
 @limiter.limit("20 per minute")
 def register():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
+
     username = payload.get("username")
     email = payload.get("email")
     password = payload.get("password")
-    
+
     if not all([username, email, password]):
         return _bad_request("Missing fields")
-        
+
+    try:
+        username = validate_username(username)
+        email = validate_email(email)
+        password = validate_password(password)
+    except ValidationError as e:
+        return _bad_request(str(e))
+
     success, message = auth_service.register_user(username, email, password)
     if not success:
         return _bad_request(message)
-        
+
+    # Auto-login after registration
+    user = auth_service.authenticate_user(username, password)
+    if user:
+        token = auth_service.generate_token(user.id)
+        refresh_token = auth_service.generate_refresh_token(user.id)
+        return jsonify({
+            "message": message,
+            "user": user.to_dict(),
+            "token": token,
+            "refresh_token": refresh_token
+        }), 201
+
     return jsonify({"message": message}), 201
 
 
 @router.post("/auth/login")
 @limiter.limit("30 per minute")
 def login():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
+
     identifier = payload.get("identifier")  # username or email
     password = payload.get("password")
-    
+
+    if not identifier or not password:
+        return _bad_request("Missing credentials")
+
     user = auth_service.authenticate_user(identifier, password)
     if not user:
         return jsonify({"error": "Invalid credentials"}), 401
-        
+
     token = auth_service.generate_token(user.id)
     refresh_token = auth_service.generate_refresh_token(user.id)
     return jsonify({
@@ -103,9 +133,12 @@ def login():
 
 
 @router.post("/auth/refresh")
-@limiter.limit("40 per minute")
+@limiter.limit("10 per minute")
 def refresh_token():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
+
     raw_refresh = payload.get("refresh_token")
     if not raw_refresh:
         return _bad_request("Missing refresh_token")
@@ -119,7 +152,9 @@ def refresh_token():
 @router.post("/auth/revoke")
 @limiter.limit("40 per minute")
 def revoke_token():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     raw_refresh = payload.get("refresh_token")
     if not raw_refresh:
         return _bad_request("Missing refresh_token")
@@ -137,6 +172,8 @@ def auth_me(current_user):
 @cache.cached(timeout=30, query_string=True)
 def get_leaderboard():
     limit = request.args.get("limit", 10, type=int)
+    # Cap limit to prevent excessive queries
+    limit = min(limit, 50)
     leaderboard = social_service.get_leaderboard(limit)
     return jsonify(leaderboard)
 
@@ -145,7 +182,9 @@ def get_leaderboard():
 @token_required
 @limiter.limit("30 per minute")
 def ai_explain(current_user):
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     sentence = payload.get("sentence")
     target_lang = payload.get("target_language", "en")
     native_lang = payload.get("native_language", "kk")
@@ -166,24 +205,28 @@ def ai_explain(current_user):
 @token_required
 @limiter.limit("30 per minute")
 def ai_feedback(current_user):
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     user_input = payload.get("user_input")
     target_text = payload.get("target_text")
     async_mode = bool(payload.get("async", False))
-    
+
     if not user_input or not target_text:
         return _bad_request("Missing fields")
-        
+
     if async_mode:
         job_id = job_service.enqueue(ai_tutor_service.provide_feedback, user_input, target_text)
         return jsonify({"job_id": job_id, "status": "queued"}), 202
 
     feedback = ai_tutor_service.provide_feedback(user_input, target_text)
-    
+
     # Award points for effort
     social_service.award_points(current_user.id, 10)
-    cache.clear()
-    
+
+    # Don't clear entire cache - only clear leaderboard cache
+    cache.delete_memoized(social_service.get_leaderboard)
+
     return jsonify(feedback)
 
 
@@ -204,7 +247,9 @@ quiz_service = QuizService()
 progress_service = ProgressService()
 reminder_service = ReminderService()
 job_service = JobService()
-WEBHOOK_SECRET = "dev_stripe_webhook_secret"
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+if not WEBHOOK_SECRET:
+    raise ValueError("WEBHOOK_SECRET environment variable must be set")
 
 
 def _json_ready(payload):
@@ -236,8 +281,11 @@ def healthcheck():
 
 
 @router.post("/lesson/unified")
+@limiter.limit("20 per minute")
 def create_unified_lesson():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     required_fields = ["user_id", "native_language", "target_language", "skill_level"]
     for field in required_fields:
         if field not in payload:
@@ -272,8 +320,11 @@ def create_unified_lesson():
 
 
 @router.post("/sentence/usage")
+@limiter.limit("30 per minute")
 def get_sentence_usage():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     if "sentence" not in payload:
         return _bad_request("Missing required field: sentence")
 
@@ -296,7 +347,9 @@ def get_synonyms(word: str):
 
 @router.post("/assessment/placement")
 def placement_assessment():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     required_fields = [
         "user_id",
         "correct_answers",
@@ -324,7 +377,9 @@ def placement_assessment():
 
 @router.post("/learning/spaced-repetition/schedule")
 def spaced_repetition_schedule():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     if "user_id" not in payload or "items" not in payload:
         return _bad_request("Missing required fields: user_id, items")
     if not isinstance(payload["items"], list):
@@ -350,7 +405,9 @@ def spaced_repetition_schedule():
 
 @router.post("/growth/monetization-advice")
 def monetization_advice():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     required_fields = ["user_id", "streak_days", "weekly_active_days", "completed_lessons"]
     for field in required_fields:
         if field not in payload:
@@ -373,7 +430,9 @@ def monetization_advice():
 
 @router.post("/billing/subscriptions")
 def create_subscription():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     required_fields = ["user_id", "plan_id", "billing_cycle"]
     for field in required_fields:
         if field not in payload:
@@ -394,7 +453,9 @@ def stripe_webhook():
     if signature != WEBHOOK_SECRET:
         return jsonify({"error": "Invalid webhook signature"}), 401
 
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     event_type = str(payload.get("event_type", "unknown"))
     event_payload = payload.get("data", {})
     response = revenue_service.handle_webhook(event_type=event_type, payload=event_payload)
@@ -403,7 +464,9 @@ def stripe_webhook():
 
 @router.post("/referrals/create")
 def create_referral():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     user_id = payload.get("user_id")
     if not user_id:
         return _bad_request("Missing required field: user_id")
@@ -413,7 +476,9 @@ def create_referral():
 
 @router.post("/referrals/redeem")
 def redeem_referral():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     if "new_user_id" not in payload or "referral_code" not in payload:
         return _bad_request("Missing required fields: new_user_id, referral_code")
     model = ReferralRedeemRequest(
@@ -438,7 +503,9 @@ def cohort_analytics():
 
 @router.post("/user/skills/update")
 def update_user_skills():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     if "user_id" not in payload or "observations" not in payload:
         return _bad_request("Missing required fields: user_id, observations")
     if not isinstance(payload["observations"], list):
@@ -477,7 +544,9 @@ def get_weak_skills(user_id: str):
 
 @router.post("/lesson/next")
 def get_next_best_lesson():
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     required_fields = ["user_id", "available_minutes", "current_level"]
     for field in required_fields:
         if field not in payload:
@@ -495,7 +564,9 @@ def get_next_best_lesson():
 @router.post("/level-test/submit")
 @token_required
 def submit_level_test(current_user):
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     required_fields = ["correct_answers", "total_questions", "average_response_seconds"]
     for field in required_fields:
         if field not in payload:
@@ -528,7 +599,9 @@ def submit_level_test(current_user):
 @router.post("/lessons/start")
 @token_required
 def start_lesson(current_user):
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     required_fields = ["current_level", "available_minutes"]
     for field in required_fields:
         if field not in payload:
@@ -581,7 +654,9 @@ def start_lesson(current_user):
 @token_required
 @limiter.limit("120 per minute")
 def submit_quiz(current_user):
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     if "lesson_id" not in payload or "results" not in payload:
         return _bad_request("Missing required fields: lesson_id, results")
     if not isinstance(payload["results"], list):
@@ -603,11 +678,25 @@ def submit_quiz(current_user):
 
     idempotency_key = request.headers.get("Idempotency-Key")
     cache_key = None
+    lock_key = None
+
     if idempotency_key:
         cache_key = f"quiz_idempotency:{current_user.id}:{idempotency_key}"
+        lock_key = f"quiz_lock:{current_user.id}:{idempotency_key}"
+
+        # Check cache first
         cached_response = cache.get(cache_key)
         if cached_response:
             return jsonify(cached_response)
+
+        # Try to acquire lock using Redis SETNX pattern
+        lock_acquired = cache.get(lock_key)
+        if lock_acquired:
+            # Another request is processing this idempotency key
+            return jsonify({"error": "Request is being processed"}), 409
+
+        # Set lock with short TTL (30 seconds)
+        cache.set(lock_key, "locked", timeout=30)
 
     try:
         quiz_model = QuizSubmitRequest(
@@ -623,6 +712,9 @@ def submit_quiz(current_user):
             results=quiz_model.results,
         )
     except ValueError as error:
+        # Release lock on error
+        if lock_key:
+            cache.delete(lock_key)
         return _bad_request(str(error))
 
     observations = [
@@ -686,8 +778,12 @@ def submit_quiz(current_user):
             "reminder": asdict(reminder),
         }
     )
+
+    # Cache response and release lock
     if cache_key:
         cache.set(cache_key, response_payload, timeout=120)
+    if lock_key:
+        cache.delete(lock_key)
 
     cache.delete(f"user_weak_skills:{current_user.id}")
     cache.delete(f"user_reminders:{current_user.id}:all")
@@ -701,10 +797,29 @@ def get_progress(current_user):
     return jsonify(_json_ready(asdict(response)))
 
 
+@router.post("/progress/award-xp")
+@token_required
+def award_xp(current_user):
+    payload = request.get_json()
+    if not payload:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    xp_delta = payload.get("xp_delta", 0)
+    if xp_delta <= 0:
+        return jsonify({"error": "xp_delta must be positive"}), 400
+
+    # Award XP and update streak
+    progress = progress_service.award_xp_and_update_streak(str(current_user.id), xp_delta)
+
+    return jsonify(_json_ready(asdict(progress)))
+
+
 @router.get("/personalization/weak-skill-trends")
 @token_required
 def weak_skill_trends(current_user):
     limit = request.args.get("limit", 50, type=int)
+    # Cap limit to prevent excessive queries
+    limit = min(limit, 100)
     return jsonify(personalization_service.get_weak_skill_trends(str(current_user.id), limit=limit))
 
 
@@ -797,6 +912,8 @@ def get_achievements(current_user):
 @token_required
 def get_mistake_review(current_user):
     limit = request.args.get("limit", 10, type=int)
+    # Cap limit to prevent excessive queries
+    limit = min(limit, 50)
     return jsonify(review_service.get_mistake_review_session(current_user.id, limit))
 
 
@@ -820,7 +937,9 @@ def seed_demo_content(current_user):
 @router.post("/social/follow")
 @token_required
 def follow_user(current_user):
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     target = payload.get("username")
     if not target:
         return _bad_request("Missing target username")
@@ -832,13 +951,17 @@ def follow_user(current_user):
 @token_required
 def get_social_feed(current_user):
     limit = request.args.get("limit", 20, type=int)
+    # Cap limit to prevent excessive queries
+    limit = min(limit, 50)
     return jsonify(social_service.get_following_activity(current_user.id, limit))
 
 
 @router.post("/social/challenge")
 @token_required
 def create_challenge(current_user):
-    payload = request.get_json(force=True)
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
     opponent = payload.get("opponent")
     goal_xp = payload.get("goal_xp", 500)
     if not opponent:

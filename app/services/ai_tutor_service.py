@@ -26,13 +26,23 @@ class AIExplanation:
 class AITutorService:
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY")
-        self.timeout_seconds = int(os.getenv("AI_TIMEOUT_SECONDS", "8"))
+        self.timeout_seconds = int(os.getenv("AI_TIMEOUT_SECONDS", "5"))
         # Base Gemini API endpoint
         self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
+
+        # Reuse session with connection pooling
         self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=2,  # Limit concurrent connections
+            pool_maxsize=5,
+            max_retries=0,  # No retries - fail fast
+            pool_block=False
+        )
+        self.session.mount('https://', adapter)
+
         self.breaker = pybreaker.CircuitBreaker(
-            fail_max=int(os.getenv("AI_CIRCUIT_FAIL_MAX", "5")),
-            reset_timeout=int(os.getenv("AI_CIRCUIT_RESET_SECONDS", "30")),
+            fail_max=int(os.getenv("AI_CIRCUIT_FAIL_MAX", "3")),  # Reduced from 5
+            reset_timeout=int(os.getenv("AI_CIRCUIT_RESET_SECONDS", "60")),  # Increased from 30
         )
 
     def explain_sentence(self, sentence: str, target_lang: str, native_lang: str) -> AIExplanation:

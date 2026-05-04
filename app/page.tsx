@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { BookOpen, Brain, Trophy, Zap } from 'lucide-react';
-import { BookOpen, Trophy, Zap } from 'lucide-react';
 
 export default function Home() {
   return (

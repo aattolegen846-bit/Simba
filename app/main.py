@@ -74,14 +74,7 @@ def create_app() -> Flask:
     cache.init_app(webapp)
     limiter.init_app(webapp)
     migrate.init_app(webapp, db)
-    CORS(webapp,
-         resources={r"/api/*": {
-             "origins": ["http://localhost:3000", "http://localhost:3001"],
-             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-             "allow_headers": ["Content-Type", "Authorization"],
-             "expose_headers": ["X-Request-Id", "X-Response-Time-Ms"]
-         }},
-         supports_credentials=True)
+    CORS(webapp, origins=["http://localhost:3000", "http://localhost:3001"], supports_credentials=True)
     if sentry_sdk and os.getenv("SENTRY_DSN"):
         sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), traces_sample_rate=0.05)
 

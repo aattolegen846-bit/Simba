@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import api from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import toast from 'react-hot-toast';
-import { X, CheckCircle, ArrowRight, Trophy, BookOpen, Brain, Sparkles, Zap, ShieldCheck, Heart, Info, Loader2 } from 'lucide-react';
+import { X, CheckCircle, ArrowRight, Trophy, BookOpen, Brain, Sparkles, Zap, ShieldCheck, Heart, Info, Loader2, MessageCircle } from 'lucide-react';
 import Link from 'next/link';
 
 // --- THEORY COMPONENT ---
@@ -138,6 +138,7 @@ function OrderingTask({ sentence, onStatusChange, isChecked, isCorrect }: {
           Reset Order
         </button>
       )}
+      </div>
     </div>
   );
 }
@@ -372,6 +373,20 @@ export default function LessonPage() {
         available_minutes: 30
       });
       setSummaryData(response.data);
+
+      // Award XP for completing the lesson
+      const correctCount = results.filter(r => r.is_correct).length;
+      const xpToAward = correctCount * 10; // 10 XP per correct answer
+
+      try {
+        await api.post('/progress/award-xp', {
+          xp_delta: xpToAward
+        });
+        toast.success(`+${xpToAward} XP earned!`);
+      } catch (xpError) {
+        console.error('Failed to award XP:', xpError);
+      }
+
       setIsCompleted(true);
     } catch (error: any) {
       toast.error('Failed to save progress');

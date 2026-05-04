@@ -797,6 +797,14 @@ def get_progress(current_user):
     return jsonify(_json_ready(asdict(response)))
 
 
+@router.get("/user/stats")
+@token_required
+def get_user_stats(current_user):
+    """Alias for /progress endpoint for frontend compatibility"""
+    response = progress_service.get_progress(str(current_user.id))
+    return jsonify(_json_ready(asdict(response)))
+
+
 @router.post("/progress/award-xp")
 @token_required
 def award_xp(current_user):

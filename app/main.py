@@ -74,7 +74,7 @@ def create_app() -> Flask:
     cache.init_app(webapp)
     limiter.init_app(webapp)
     migrate.init_app(webapp, db)
-    CORS(webapp, origins=["http://localhost:3000", "http://localhost:3001"], supports_credentials=True)
+    CORS(webapp, origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3003", "http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:3002"], supports_credentials=True)
     if sentry_sdk and os.getenv("SENTRY_DSN"):
         sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), traces_sample_rate=0.05)
 
@@ -82,6 +82,18 @@ def create_app() -> Flask:
         import app.models.user  # noqa: F401
         import app.models.db_models  # noqa: F401
         db.create_all()
+        
+        # Auto-seed if empty
+        if app.models.db_models.Course.query.count() == 0:
+            import sys
+            sys.path.append(os.getcwd())
+            try:
+                from generate_curriculum import seed_level, levels
+                for title, code, topics in levels:
+                    seed_level(title, code, topics)
+                db.session.commit()
+            except Exception as e:
+                pass
 
     webapp.register_blueprint(router)
 

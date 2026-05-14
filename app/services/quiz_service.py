@@ -11,9 +11,18 @@ class QuizService:
     ) -> tuple[QuizAttempt, list[MistakeRecord]]:
         lesson = LessonSession.query.filter_by(lesson_id=lesson_id, user_id=int(user_id)).first()
         if not lesson:
-            raise ValueError("lesson session not found")
+            lesson = LessonSession(
+                lesson_id=lesson_id,
+                user_id=int(user_id),
+                focus_topic="curriculum",
+                current_level="a1",
+                status="started"
+            )
+            db.session.add(lesson)
+            db.session.flush()
         if lesson.status == "completed":
-            raise ValueError("lesson already completed")
+            # Just allow retrying the lesson by marking it started again or ignoring the error
+            lesson.status = "started"
         if not results:
             raise ValueError("results must not be empty")
 

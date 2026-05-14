@@ -32,6 +32,8 @@ class User(db.Model):
             "email": self.email,
             "role": self.role,
             "cefr_level": self.cefr_level,
+            "level": self.cefr_level,
             "points": self.points,
+            "xp": self.points,
             "created_at": self.created_at.isoformat(),
         }

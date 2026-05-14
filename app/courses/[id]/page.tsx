@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import api from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import toast from 'react-hot-toast';
-import { Brain, BookOpen, ArrowLeft, Play } from 'lucide-react';
+import { Brain, BookOpen, ArrowLeft, Play, Lock, CheckCircle } from 'lucide-react';
 import Link from 'next/link';
 
 interface Module {
@@ -17,6 +17,8 @@ interface Module {
 interface Lesson {
   id: number;
   title: string;
+  is_locked?: boolean;
+  is_completed?: boolean;
 }
 
 interface CourseDetails {
@@ -100,19 +102,39 @@ export default function CoursePage() {
                   <p className="text-gray-500">No lessons in this module yet.</p>
                 ) : (
                   <div className="space-y-3">
-                    {module.lessons.map((lesson) => (
-                      <Link
-                        key={lesson.id}
-                        href={`/lessons/${lesson.id}`}
-                        className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-indigo-50 transition-colors group"
-                      >
-                        <div className="flex items-center space-x-3">
-                          <BookOpen className="w-5 h-5 text-indigo-600" />
-                          <span className="font-medium text-gray-900">{lesson.title}</span>
-                        </div>
-                        <Play className="w-5 h-5 text-gray-400 group-hover:text-indigo-600" />
-                      </Link>
-                    ))}
+                    {module.lessons.map((lesson) => {
+                      if (lesson.is_locked) {
+                        return (
+                          <div
+                            key={lesson.id}
+                            className="flex items-center justify-between p-4 bg-gray-50 rounded-lg opacity-60 cursor-not-allowed group"
+                          >
+                            <div className="flex items-center space-x-3">
+                              <Lock className="w-5 h-5 text-gray-400" />
+                              <span className="font-medium text-gray-500">{lesson.title}</span>
+                            </div>
+                            <Lock className="w-4 h-4 text-gray-300" />
+                          </div>
+                        );
+                      }
+                      return (
+                        <Link
+                          key={lesson.id}
+                          href={`/lessons/${lesson.id}`}
+                          className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-indigo-50 transition-colors group"
+                        >
+                          <div className="flex items-center space-x-3">
+                            {lesson.is_completed ? (
+                              <CheckCircle className="w-5 h-5 text-green-500" />
+                            ) : (
+                              <BookOpen className="w-5 h-5 text-indigo-600" />
+                            )}
+                            <span className="font-medium text-gray-900">{lesson.title}</span>
+                          </div>
+                          <Play className="w-5 h-5 text-gray-400 group-hover:text-indigo-600" />
+                        </Link>
+                      );
+                    })}
                   </div>
                 )}
               </div>

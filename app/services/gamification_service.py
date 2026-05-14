@@ -1,4 +1,5 @@
 import datetime
+from datetime import timedelta
 from typing import List, Optional
 
 from app.database import db
@@ -11,18 +12,34 @@ class GamificationService:
     @staticmethod
     def update_xp(user_id: int, xp_gained: int) -> dict:
         """
-        Updates a user's XP, checks daily goals, and marks progress in current league.
+        Updates a user's XP, checks daily goals, handles streak, and marks progress in current league.
         """
         progress = UserProgress.query.filter_by(user_id=user_id).first()
         if not progress:
-            progress = UserProgress(user_id=user_id, xp_total=0, daily_xp_current=0)
+            progress = UserProgress(user_id=user_id, xp_total=0, daily_xp_current=0, daily_xp_target=50, streak_days=0)
             db.session.add(progress)
         
         if progress.xp_total is None: progress.xp_total = 0
         if progress.daily_xp_current is None: progress.daily_xp_current = 0
+        if progress.daily_xp_target is None: progress.daily_xp_target = 50
+        if progress.streak_days is None: progress.streak_days = 0
+
+        # Handle streak logic
+        today = datetime.date.today()
+        yesterday = today - timedelta(days=1)
+        
+        if progress.last_activity_date != today:
+            # New day activity
+            if progress.last_activity_date == yesterday:
+                progress.streak_days += 1
+            else:
+                progress.streak_days = 1
+            # Reset daily XP for new day
+            progress.daily_xp_current = 0
 
         progress.xp_total += xp_gained
         progress.daily_xp_current += xp_gained
+        progress.last_activity_date = today
         
         # NEW: Update Quests
         EngagementService.update_quest_progress(user_id, "xp_goal", xp_gained)
@@ -88,7 +105,9 @@ class GamificationService:
             "daily_xp": progress.daily_xp_current,
             "daily_goal": progress.daily_xp_target,
             "goal_reached": goal_reached,
-            "league": progress.current_league
+            "league": progress.current_league,
+            "streak_days": progress.streak_days,
+            "last_activity_date": progress.last_activity_date.isoformat() if progress.last_activity_date else None
         }
 
     @staticmethod

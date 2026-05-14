@@ -18,6 +18,7 @@ class SocialService:
             {
                 "username": u.username,
                 "points": u.points,
+                "xp": u.points,
                 "cefr_level": u.cefr_level,
                 "rank": i + 1
             }
@@ -101,10 +102,12 @@ class SocialService:
         return feed
 
     @staticmethod
-    def create_friend_challenge(creator_id: int, opponent_username: str, goal_xp: int = 500) -> Optional[dict]:
+    def create_friend_challenge(creator_id: int, opponent_username: str, goal_xp: int = 500) -> dict:
         opponent = User.query.filter_by(username=opponent_username).first()
-        if not opponent or opponent.id == creator_id:
-            return None
+        if not opponent:
+            raise ValueError("Opponent user not found")
+        if opponent.id == creator_id:
+            raise ValueError("You cannot challenge yourself")
             
         expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)
         challenge = FriendChallenge(

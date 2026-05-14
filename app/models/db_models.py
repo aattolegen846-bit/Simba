@@ -80,7 +80,7 @@ class LessonSession(db.Model):
         Index("ix_lesson_sessions_lesson_id", "lesson_id"),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    lesson_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    lesson_id: Mapped[str] = mapped_column(String(32), nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     focus_topic: Mapped[str] = mapped_column(String(64), nullable=False)
     current_level: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -188,6 +188,7 @@ class Lesson(db.Model):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     module_id: Mapped[int] = mapped_column(ForeignKey("modules.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(128), nullable=False)
+    theory: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     order: Mapped[int] = mapped_column(Integer, default=0)
 
 

@@ -1,9 +1,8 @@
 # Python
-.env
-instance/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+venv/
 
 # Node.js / Next.js
 node_modules
@@ -12,3 +11,8 @@ node_modules
 .env.local
 dist
 build
+
+# Keep these files (do NOT ignore):
+# instance/simpai.db  — curriculum database
+# .env                — local config
+# seed_*.py           — curriculum seed scripts

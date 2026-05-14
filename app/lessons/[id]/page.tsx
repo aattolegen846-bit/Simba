@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import api from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import toast from 'react-hot-toast';
-import { X, CheckCircle, ArrowRight, Trophy, BookOpen, Brain, Sparkles, Zap, ShieldCheck, Heart, Info, Loader2, MessageCircle } from 'lucide-react';
+import { X, CheckCircle, ArrowRight, Trophy, BookOpen, Brain, Sparkles, Zap, ShieldCheck, Heart, Info, Loader2, MessageCircle, Send } from 'lucide-react';
 import Link from 'next/link';
+import confetti from 'canvas-confetti';
 
 // --- THEORY COMPONENT ---
 function TheoryCard({ theory, onStart }: { theory: any, onStart: () => void }) {
@@ -66,6 +67,7 @@ interface LessonData {
   lesson_id: string;
   title: string;
   tasks: Task[];
+  theory?: any;
 }
 
 interface TaskResult {
@@ -86,6 +88,19 @@ function OrderingTask({ sentence, onStatusChange, isChecked, isCorrect }: {
   const [selectedWords, setSelectedWords] = useState<string[]>([]);
   const [availableWords, setAvailableWords] = useState<string[]>(sentence.words);
 
+  // Join words smartly: attach punctuation to previous word
+  const smartJoin = (words: string[]) => {
+    return words.reduce((acc, w, i) => {
+      if (i === 0) return w;
+      // Don't add space before punctuation
+      if (/^[.,!?;:']/.test(w)) return acc + w;
+      return acc + ' ' + w;
+    }, '');
+  };
+
+  // Normalize for comparison: trim, collapse spaces, lowercase
+  const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+
   const handleWordClick = (word: string, widx: number) => {
     if (isChecked) return;
     const newSelected = [...selectedWords, word];
@@ -94,8 +109,9 @@ function OrderingTask({ sentence, onStatusChange, isChecked, isCorrect }: {
     newAvailable.splice(widx, 1);
     setAvailableWords(newAvailable);
     
-    const currentAnswer = newSelected.join(' ');
-    onStatusChange(currentAnswer, currentAnswer === sentence.correct);
+    const currentAnswer = smartJoin(newSelected);
+    const isMatch = normalize(currentAnswer) === normalize(sentence.correct);
+    onStatusChange(currentAnswer, isMatch);
   };
 
   const handleReset = () => {
@@ -196,11 +212,13 @@ function MatchingTask({ pairs, isChecked, onStatusChange }: { pairs: any[], isCh
   const [selectedLeft, setSelectedLeft] = useState<number | null>(null);
   const [selectedRight, setSelectedRight] = useState<number | null>(null);
   const [matchedIds, setMatchedIds] = useState<number[]>([]);
+  const [wrongMatchCount, setWrongMatchCount] = useState(0);
   const [wrongMatch, setWrongMatch] = useState<{left: number, right: number} | null>(null);
 
   useEffect(() => {
-    const left = pairs.map((p, i) => ({ id: i, text: p.left })).sort(() => Math.random() - 0.5);
-    const right = pairs.map((p, i) => ({ id: i, text: p.right })).sort(() => Math.random() - 0.5);
+    // Support both {left, right} and {item, match} pair formats
+    const left = pairs.map((p, i) => ({ id: i, text: p.left || p.item })).sort(() => Math.random() - 0.5);
+    const right = pairs.map((p, i) => ({ id: i, text: p.right || p.match })).sort(() => Math.random() - 0.5);
     setLeftWords(left);
     setRightWords(right);
   }, [pairs]);
@@ -212,9 +230,11 @@ function MatchingTask({ pairs, isChecked, onStatusChange }: { pairs: any[], isCh
         setSelectedLeft(null);
         setSelectedRight(null);
         if (matchedIds.length + 1 === pairs.length) {
-          onStatusChange('completed', true);
+          // Only mark as correct if no wrong matches were made
+          onStatusChange('completed', wrongMatchCount === 0);
         }
       } else {
+        setWrongMatchCount(prev => prev + 1);
         setWrongMatch({ left: selectedLeft, right: selectedRight });
         setTimeout(() => {
           setWrongMatch(null);
@@ -223,7 +243,7 @@ function MatchingTask({ pairs, isChecked, onStatusChange }: { pairs: any[], isCh
         }, 500);
       }
     }
-  }, [selectedLeft, selectedRight, matchedIds, pairs.length, onStatusChange]);
+  }, [selectedLeft, selectedRight, matchedIds, pairs.length, onStatusChange, wrongMatchCount]);
 
   return (
     <div className="space-y-8 py-4">
@@ -266,11 +286,15 @@ function MatchingTask({ pairs, isChecked, onStatusChange }: { pairs: any[], isCh
       </div>
 
       {matchedIds.length === pairs.length && (
-        <div className="p-6 bg-green-50 rounded-3xl border-b-4 border-green-200 flex items-start space-x-4 animate-in slide-in-from-bottom duration-300">
-          <ShieldCheck className="w-6 h-6 text-green-600 mt-1" />
+        <div className={`p-6 rounded-3xl border-b-4 flex items-start space-x-4 animate-in slide-in-from-bottom duration-300 ${wrongMatchCount === 0 ? 'bg-green-50 border-green-200' : 'bg-orange-50 border-orange-200'}`}>
+          <ShieldCheck className={`w-6 h-6 mt-1 ${wrongMatchCount === 0 ? 'text-green-600' : 'text-orange-600'}`} />
           <div>
-            <p className="text-sm font-black text-green-900 uppercase tracking-widest mb-1">Excellent!</p>
-            <p className="text-sm text-green-700 font-medium">You've matched all pairs correctly. Click continue to proceed.</p>
+            <p className={`text-sm font-black uppercase tracking-widest mb-1 ${wrongMatchCount === 0 ? 'text-green-900' : 'text-orange-900'}`}>
+              {wrongMatchCount === 0 ? 'Perfect!' : 'Completed with mistakes'}
+            </p>
+            <p className={`text-sm font-medium ${wrongMatchCount === 0 ? 'text-green-700' : 'text-orange-700'}`}>
+              {wrongMatchCount === 0 ? 'All pairs matched correctly!' : `You made ${wrongMatchCount} wrong attempt(s). Click continue.`}
+            </p>
           </div>
         </div>
       )}
@@ -283,7 +307,7 @@ function MatchingTask({ pairs, isChecked, onStatusChange }: { pairs: any[], isCh
 export default function LessonPage() {
   const router = useRouter();
   const params = useParams();
-  const { user } = useAuthStore();
+  const { user, updateUser } = useAuthStore();
   
   const [lesson, setLesson] = useState<LessonData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -298,6 +322,10 @@ export default function LessonPage() {
   const [isCorrect, setIsCorrect] = useState(false);
   const [isChecked, setIsChecked] = useState(false);
   const [showTheory, setShowTheory] = useState(true);
+
+  // Refs to track latest values (avoids stale closure in handleCheck)
+  const currentAnswerRef = useRef('');
+  const isCorrectRef = useRef(false);
 
   // AI Chat states
   const [showAiChat, setShowAiChat] = useState(false);
@@ -326,6 +354,8 @@ export default function LessonPage() {
   const handleStatusChange = (answer: string, correct: boolean) => {
     setCurrentAnswer(answer);
     setIsCorrect(correct);
+    currentAnswerRef.current = answer;
+    isCorrectRef.current = correct;
   };
 
   const handleCheck = () => {
@@ -337,15 +367,22 @@ export default function LessonPage() {
     setIsChecked(true);
     const task = lesson!.tasks[currentTaskIdx];
     
-    // Auto-correct for matching tasks as they are for learning
-    const finalCorrect = task.type === 'matching' ? true : isCorrect;
-    if (task.type === 'matching') setIsCorrect(true);
+    // Use ref values to avoid stale React state
+    const finalCorrect = isCorrectRef.current;
+    setIsCorrect(finalCorrect);
+    
+    // Play sound effects
+    if (finalCorrect) {
+      new Audio('https://assets.mixkit.co/sfx/preview/mixkit-correct-answer-tone-2870.mp3').play().catch(() => {});
+    } else {
+      new Audio('https://assets.mixkit.co/sfx/preview/mixkit-wrong-answer-fail-notification-946.mp3').play().catch(() => {});
+    }
     
     setResults(prev => [...prev, {
       skill: task.skill || 'general',
       is_correct: finalCorrect,
-      user_answer: currentAnswer || 'viewed',
-      expected_answer: task.type === 'matching' ? 'viewed' : (task.content.sentences?.[0]?.answer || task.content.sentences?.[0]?.correct)
+      user_answer: currentAnswerRef.current || '',
+      expected_answer: task.type === 'matching' ? 'all pairs' : (task.content.sentences?.[0]?.answer || task.content.sentences?.[0]?.correct)
     }]);
   };
 
@@ -382,6 +419,7 @@ export default function LessonPage() {
         await api.post('/progress/award-xp', {
           xp_delta: xpToAward
         });
+        updateUser({ xp: (user?.xp || 0) + xpToAward });
         toast.success(`+${xpToAward} XP earned!`);
       } catch (xpError) {
         console.error('Failed to award XP:', xpError);
@@ -404,6 +442,7 @@ export default function LessonPage() {
   }
 
   const task = lesson.tasks[currentTaskIdx];
+  if (!task) return <CompletionScreen lesson={lesson} summaryData={summaryData} />;
   const progress = ((currentTaskIdx + 1) / lesson.tasks.length) * 100;
 
   return (
@@ -490,8 +529,8 @@ export default function LessonPage() {
           </div>
           <button 
             onClick={handleCheck}
-            disabled={!currentAnswer && !isChecked && task.type !== 'matching'}
-            className={`px-12 py-4 rounded-2xl text-xl font-black transition-all transform active:scale-95 ${isChecked ? (isCorrect ? 'bg-[#58CC02] hover:bg-[#46A302] text-white shadow-[0_4px_0_#46A302]' : 'bg-[#FF4B4B] hover:bg-[#EA2B2B] text-white shadow-[0_4px_0_#EA2B2B]') : (currentAnswer || task.type === 'matching' ? 'bg-[#58CC02] text-white shadow-[0_4px_0_#46A302]' : 'bg-[#E5E5E5] text-[#AFAFAF] cursor-not-allowed')}`}
+            disabled={!currentAnswer && !isChecked}
+            className={`px-12 py-4 rounded-2xl text-xl font-black transition-all transform active:scale-95 ${isChecked ? (isCorrect ? 'bg-[#58CC02] hover:bg-[#46A302] text-white shadow-[0_4px_0_#46A302]' : 'bg-[#FF4B4B] hover:bg-[#EA2B2B] text-white shadow-[0_4px_0_#EA2B2B]') : (currentAnswer ? 'bg-[#58CC02] text-white shadow-[0_4px_0_#46A302]' : 'bg-[#E5E5E5] text-[#AFAFAF] cursor-not-allowed')}`}
           >
             {isChecked ? 'CONTINUE' : 'CHECK'}
           </button>
@@ -549,33 +588,74 @@ export default function LessonPage() {
 
 function CompletionScreen({ lesson, summaryData }: { lesson: LessonData | null, summaryData: any }) {
   const router = useRouter();
-  const xp = summaryData?.progress?.xp_earned || 150;
-  const accuracy = summaryData?.score ? Math.round((summaryData.score / summaryData.total_questions) * 100) : 100;
+  
+  // Calculate real stats from submitted data
+  const correctCount = summaryData?.score || 0;
+  const totalCount = summaryData?.total_questions || 0;
+  const accuracy = totalCount > 0 ? Math.round((correctCount / totalCount) * 100) : 0;
+  const xp = summaryData?.xp_reward?.xp_gained || (correctCount * 10);
+  const isPerfect = accuracy === 100;
+  const isPassing = accuracy >= 60;
+
+  useEffect(() => {
+    if (isPassing) {
+      confetti({
+        particleCount: isPerfect ? 250 : 100,
+        spread: 120,
+        origin: { y: 0.5 },
+        colors: ['#58CC02', '#1CB0F6', '#FF4B4B', '#FFD700']
+      });
+      new Audio('https://assets.mixkit.co/sfx/preview/mixkit-winning-chimes-2015.mp3').play().catch(() => {});
+    } else {
+      new Audio('https://assets.mixkit.co/sfx/preview/mixkit-wrong-answer-fail-notification-946.mp3').play().catch(() => {});
+    }
+  }, [isPassing, isPerfect]);
 
   return (
     <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6">
       <div className="max-w-md w-full text-center space-y-8 animate-in zoom-in duration-500">
-        <Trophy className="w-32 h-32 text-[#FFD700] mx-auto animate-bounce" />
-        <h1 className="text-4xl font-black text-[#58CC02] tracking-tight">LESSON COMPLETE!</h1>
-        <p className="text-xl text-gray-500 font-bold">You've mastered <span className="text-gray-900">{lesson?.title}</span></p>
+        <Trophy className={`w-32 h-32 mx-auto ${isPassing ? 'text-[#FFD700] animate-bounce' : 'text-gray-300'}`} />
+        
+        <h1 className={`text-4xl font-black tracking-tight ${isPassing ? 'text-[#58CC02]' : 'text-[#EA2B2B]'}`}>
+          {isPerfect ? 'PERFECT!' : isPassing ? 'LESSON COMPLETE!' : 'KEEP PRACTICING!'}
+        </h1>
+        <p className="text-xl font-bold" style={{ color: '#6B7280' }}>
+          {isPassing 
+            ? <>You've completed <span style={{ color: '#111827' }}>{lesson?.title}</span></>
+            : <>Try <span style={{ color: '#111827' }}>{lesson?.title}</span> again to improve</>}
+        </p>
         
         <div className="grid grid-cols-2 gap-6">
           <div className="bg-[#58CC02]/10 p-6 rounded-3xl border-b-4 border-[#58CC02]/20">
-            <p className="text-xs font-black text-[#58CC02] uppercase tracking-widest mb-1">TOTAL XP</p>
-            <p className="text-4xl font-black text-[#58CC02]">+{xp}</p>
+            <p className="text-xs font-black uppercase tracking-widest mb-1" style={{ color: '#58CC02' }}>TOTAL XP</p>
+            <p className="text-4xl font-black" style={{ color: '#58CC02' }}>+{xp}</p>
           </div>
-          <div className="bg-[#1CB0F6]/10 p-6 rounded-3xl border-b-4 border-[#1CB0F6]/20">
-            <p className="text-xs font-black text-[#1CB0F6] uppercase tracking-widest mb-1">ACCURACY</p>
-            <p className="text-4xl font-black text-[#1CB0F6]">{accuracy}%</p>
+          <div className={`p-6 rounded-3xl border-b-4 ${accuracy >= 80 ? 'bg-[#1CB0F6]/10 border-[#1CB0F6]/20' : accuracy >= 50 ? 'bg-orange-100 border-orange-200' : 'bg-red-100 border-red-200'}`}>
+            <p className="text-xs font-black uppercase tracking-widest mb-1" style={{ color: accuracy >= 80 ? '#1CB0F6' : accuracy >= 50 ? '#EA580C' : '#EA2B2B' }}>ACCURACY</p>
+            <p className="text-4xl font-black" style={{ color: accuracy >= 80 ? '#1CB0F6' : accuracy >= 50 ? '#EA580C' : '#EA2B2B' }}>{accuracy}%</p>
           </div>
         </div>
+        
+        <p className="text-base font-bold" style={{ color: '#6B7280' }}>
+          {correctCount} / {totalCount} correct answers
+        </p>
 
-        <button 
-          onClick={() => router.push('/dashboard')}
-          className="w-full py-5 bg-[#1CB0F6] text-white rounded-2xl text-xl font-black shadow-[0_6px_0_#1899D6] hover:bg-[#1899D6] transition-all transform active:translate-y-1"
-        >
-          CONTINUE
-        </button>
+        <div className="flex flex-col gap-3">
+          {!isPassing && (
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full py-5 bg-[#FF4B4B] text-white rounded-2xl text-xl font-black shadow-[0_6px_0_#CC3C3C] hover:bg-[#EA2B2B] transition-all transform active:translate-y-1"
+            >
+              TRY AGAIN
+            </button>
+          )}
+          <button 
+            onClick={() => router.push('/courses')}
+            className="w-full py-5 bg-[#1CB0F6] text-white rounded-2xl text-xl font-black shadow-[0_6px_0_#1899D6] hover:bg-[#1899D6] transition-all transform active:translate-y-1"
+          >
+            CONTINUE
+          </button>
+        </div>
       </div>
     </div>
   );

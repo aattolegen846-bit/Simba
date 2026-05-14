@@ -23,6 +23,7 @@ from app.models.schemas import (
     QuizQuestionResult,
     QuizSubmitRequest,
     VocabReviewItem,
+    ProgressSnapshot,
 )
 from app.validators import validate_email, validate_username, validate_password, ValidationError
 from app.services.auth_service import AuthService
@@ -38,7 +39,7 @@ from app.services.personalization_service import PersonalizationService
 from app.services.sentence_usage_service import SentenceUsageService
 from app.services.synonym_service import SynonymService
 from app.services.unified_learning_service import UnifiedLearningService
-from app.models.db_models import LessonSession, UserEvent
+from app.models.db_models import LessonSession, UserEvent, QuizAttempt
 from app.models.user import User
 from app.services.ai_tutor_service import AITutorService
 from app.services.social_service import SocialService
@@ -738,10 +739,17 @@ def submit_quiz(current_user):
 
     xp_gain = (attempt.score * 10) + (5 if attempt.score == attempt.total_questions else 0)
     
-    # NEW: Unified Pro Gamification
+    # Award XP and update all gamification metrics in one call
     gamification_payload = gamification_service.update_xp(current_user.id, xp_gain)
     
-    progress = progress_service.award_xp_and_update_streak(str(current_user.id), xp_gain)
+    # Create progress snapshot from gamification data
+    progress = ProgressSnapshot(
+        user_id=str(current_user.id),
+        xp_total=gamification_payload.get('total_xp', 0),
+        streak_days=gamification_payload.get('streak_days', 0),
+        last_activity_date=gamification_payload.get('last_activity_date')
+    )
+    
     reminder = reminder_service.schedule_followup_reminder(
         user_id=str(current_user.id),
         reminder_type="weak_topic_followup",
@@ -775,6 +783,7 @@ def submit_quiz(current_user):
             "weak_skills": [asdict(item) for item in weak_data.weak_skills],
             "next_lesson": asdict(next_lesson),
             "progress": asdict(progress),
+            "xp_reward": gamification_payload,
             "reminder": asdict(reminder),
         }
     )
@@ -790,6 +799,54 @@ def submit_quiz(current_user):
     return jsonify(response_payload)
 
 
+@router.post("/task/complete")
+@token_required
+@limiter.limit("120 per minute")
+def complete_task(current_user):
+    """Award XP for completing an individual task"""
+    payload = request.get_json()
+    if not payload:
+        return _bad_request("Invalid JSON")
+    
+    task_id = payload.get("task_id")
+    lesson_id = payload.get("lesson_id")
+    task_type = payload.get("task_type")  # e.g., "matching", "gaps", "ordering"
+    
+    if not all([task_id, lesson_id, task_type]):
+        return _bad_request("Missing required fields: task_id, lesson_id, task_type")
+    
+    # Award XP for task completion (15 XP per task)
+    xp_gain = 15
+    
+    # Award XP
+    gamification_payload = gamification_service.update_xp(current_user.id, xp_gain)
+    
+    # Log the event
+    event_payload = {
+        "task_id": task_id,
+        "lesson_id": lesson_id,
+        "task_type": task_type,
+        "xp_gained": xp_gain,
+    }
+    db.session.add(
+        UserEvent(
+            user_id=current_user.id,
+            event_type="task_completed",
+            data=event_payload,
+        )
+    )
+    db.session.commit()
+    
+    response_payload = {
+        "user_id": str(current_user.id),
+        "task_id": task_id,
+        "lesson_id": lesson_id,
+        "xp_reward": gamification_payload,
+    }
+    
+    return jsonify(_json_ready(response_payload))
+
+
 @router.get("/progress")
 @token_required
 def get_progress(current_user):
@@ -800,9 +857,19 @@ def get_progress(current_user):
 @router.get("/user/stats")
 @token_required
 def get_user_stats(current_user):
-    """Alias for /progress endpoint for frontend compatibility"""
-    response = progress_service.get_progress(str(current_user.id))
-    return jsonify(_json_ready(asdict(response)))
+    progress = progress_service.get_progress(str(current_user.id))
+    weak_data = adaptive_service.get_weak_skills(str(current_user.id))
+    weak_skills_count = len(weak_data.weak_skills) if weak_data else 0
+    lessons_completed = QuizAttempt.query.filter_by(user_id=current_user.id).count()
+    
+    return jsonify({
+        "xp": progress.xp_total,
+        "streak": progress.streak_days,
+        "level": current_user.cefr_level,
+        "points": current_user.points,
+        "lessons_completed": lessons_completed,
+        "weak_skills_count": weak_skills_count
+    })
 
 
 @router.post("/progress/award-xp")
@@ -816,8 +883,16 @@ def award_xp(current_user):
     if xp_delta <= 0:
         return jsonify({"error": "xp_delta must be positive"}), 400
 
-    # Award XP and update streak
-    progress = progress_service.award_xp_and_update_streak(str(current_user.id), xp_delta)
+    # Award XP and update all gamification metrics
+    gamification_payload = gamification_service.update_xp(current_user.id, xp_delta)
+    
+    # Create progress snapshot for response compatibility
+    progress = ProgressSnapshot(
+        user_id=str(current_user.id),
+        xp_total=gamification_payload.get('total_xp', 0),
+        streak_days=gamification_payload.get('streak_days', 0),
+        last_activity_date=gamification_payload.get('last_activity_date')
+    )
 
     return jsonify(_json_ready(asdict(progress)))
 
@@ -895,13 +970,13 @@ def get_courses(current_user):
 @router.get("/courses/<int:course_id>")
 @token_required
 def get_course_details(current_user, course_id: int):
-    return jsonify(content_service.get_course_details(course_id))
+    return jsonify(content_service.get_course_details(course_id, user_id=current_user.id))
 
 
-@router.get("/lessons/<int:lesson_id>/tasks")
+@router.get("/lessons/<lesson_id>/tasks")
 @token_required
-def get_lesson_tasks(current_user, lesson_id: int):
-    return jsonify(content_service.get_lesson_tasks(lesson_id))
+def get_lesson_tasks(current_user, lesson_id: str):
+    return jsonify(content_service.get_lesson_tasks(lesson_id, user_id=current_user.id))
 
 
 @router.get("/gamification/leaderboard")
@@ -974,10 +1049,11 @@ def create_challenge(current_user):
     goal_xp = payload.get("goal_xp", 500)
     if not opponent:
         return _bad_request("Missing opponent username")
-    result = social_service.create_friend_challenge(current_user.id, opponent, goal_xp)
-    if not result:
-        return _bad_request("Could not create challenge")
-    return jsonify(result)
+    try:
+        result = social_service.create_friend_challenge(current_user.id, opponent, goal_xp)
+        return jsonify(result)
+    except ValueError as e:
+        return _bad_request(str(e))
 
 
 @router.get("/social/challenges")
